@@ -5,6 +5,7 @@ import os
 from functools import wraps
 from io import BytesIO
 import openpyxl
+import sys
 
 app = Flask(__name__)
 app.secret_key = 'clave_secreta_cambiala_luego'
@@ -19,6 +20,9 @@ USUARIOS = [
 ]
 
 PAUSA_FILE = 'pausa.txt'
+
+# --- Administrador: cámbialo al nombre que quieras ---
+ADMIN_NOMBRE = "JEAN OLIVARES"   # <--- CAMBIA AQUÍ EL ADMINISTRADOR
 
 def get_pausa():
     if os.path.exists(PAUSA_FILE):
@@ -38,6 +42,7 @@ def login_requerido(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# --- Inicialización de la base de datos (se ejecuta al arrancar) ---
 def init_db():
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
@@ -48,6 +53,7 @@ def init_db():
     )''')
     conn.commit()
     conn.close()
+    print("Base de datos inicializada (tabla metadata creada)", file=sys.stderr)
 
 def get_columnas(hoja):
     conn = sqlite3.connect(DATABASE)
@@ -94,6 +100,7 @@ def cargar_excel_en_db(archivo_excel):
                 df[col_g] = ''
             crear_tabla_dinamica(hoja, df)
         else:
+            # Crear tabla vacía
             df_vacio = pd.DataFrame(columns=[col_f, col_g])
             crear_tabla_dinamica(hoja, df_vacio)
 
@@ -106,7 +113,8 @@ def exportar_db_a_excel():
                 df = pd.read_sql_query(f'SELECT * FROM "{hoja}"', conn)
                 df = df.fillna('')
                 df.to_excel(writer, sheet_name=hoja, index=False)
-            except:
+            except Exception as e:
+                print(f"Error exportando {hoja}: {e}", file=sys.stderr)
                 pd.DataFrame().to_excel(writer, sheet_name=hoja, index=False)
             conn.close()
     output.seek(0)
@@ -149,7 +157,8 @@ def dashboard():
     return render_template('dashboard.html', 
                            usuario=session['usuario'],
                            hoja_actual=hoja_actual,
-                           pausa=pausa)
+                           pausa=pausa,
+                           admin=ADMIN_NOMBRE)
 
 @app.route('/get_datos')
 @login_requerido
@@ -186,7 +195,7 @@ def guardar_fila():
 @app.route('/subir_excel', methods=['POST'])
 @login_requerido
 def subir_excel():
-    if session['usuario'] != 'ANA JULCA':
+    if session['usuario'] != ADMIN_NOMBRE:
         return jsonify({'error': 'No autorizado'}), 403
     if 'archivo' not in request.files:
         return jsonify({'error': 'No se envió archivo'}), 400
@@ -194,7 +203,7 @@ def subir_excel():
     if archivo.filename == '':
         return jsonify({'error': 'Archivo vacío'}), 400
     if not archivo.filename.endswith(('.xlsx', '.xls')):
-        return jsonify({'error': 'Formato no válido'}), 400
+        return jsonify({'error': 'Formato no válido, debe ser .xlsx o .xls'}), 400
     temp_path = 'temp_upload.xlsx'
     archivo.save(temp_path)
     try:
@@ -203,6 +212,7 @@ def subir_excel():
         return jsonify({'ok': True, 'mensaje': 'Excel cargado correctamente'})
     except Exception as e:
         os.remove(temp_path)
+        print(f"Error al cargar Excel: {e}", file=sys.stderr)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/exportar')
@@ -214,18 +224,22 @@ def exportar():
 @app.route('/toggle_pausa', methods=['POST'])
 @login_requerido
 def toggle_pausa():
-    if session['usuario'] != 'ANA JULCA':
+    if session['usuario'] != ADMIN_NOMBRE:
         return jsonify({'error': 'No autorizado'}), 403
     nuevo_estado = not get_pausa()
     set_pausa(nuevo_estado)
     return jsonify({'pausa': nuevo_estado})
 
+# --- Inicialización al arrancar (para gunicorn) ---
+init_db()
+
+# Crear tablas vacías si no existen (por si nunca se subió Excel)
+for hoja in ['SCD-2026', 'SAF-2026']:
+    if not get_columnas(hoja):
+        col_f = "AA ENCARGADO/MATERIALES Y GESTION"
+        col_g = "AA ENCARGADO/EQUIPAMIENTO"
+        df_vacio = pd.DataFrame(columns=[col_f, col_g])
+        crear_tabla_dinamica(hoja, df_vacio)
+
 if __name__ == '__main__':
-    init_db()
-    for hoja in ['SCD-2026', 'SAF-2026']:
-        if not get_columnas(hoja):
-            col_f = "AA ENCARGADO/MATERIALES Y GESTION"
-            col_g = "AA ENCARGADO/EQUIPAMIENTO"
-            df_vacio = pd.DataFrame(columns=[col_f, col_g])
-            crear_tabla_dinamica(hoja, df_vacio)
     app.run(debug=True)
