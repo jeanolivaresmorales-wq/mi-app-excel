@@ -20,8 +20,8 @@
     <h2>Bienvenido, {{ usuario }}</h2>
     <div class="acciones">
         <button id="btnExportar">📥 Exportar Excel</button>
-        <button id="btnSubir" {% if usuario != 'ANA JULCA' %}disabled{% endif %}>📂 Subir Excel nuevo (solo admin)</button>
-        <button id="btnPausa" {% if usuario != 'ANA JULCA' %}disabled{% endif %}>⏸️ Pausar / Reanudar</button>
+        <button id="btnSubir" {% if usuario != admin %}disabled{% endif %}>📂 Subir Excel nuevo (solo admin)</button>
+        <button id="btnPausa" {% if usuario != admin %}disabled{% endif %}>⏸️ Pausar / Reanudar</button>
         <span id="estadoPausa" style="margin-left: 20px;"></span>
         <a href="/logout" style="margin-left: 20px;">Cerrar sesión</a>
     </div>
@@ -61,7 +61,7 @@
                     html += `<td><textarea rows="2" style="width:100%" data-col="${col}" data-fila="${i}">${escapeHtml(valor)}</textarea></td>`;
                 }
                 html += `<td><button class="guardar" data-fila="${i}" data-rowid="${rowid}">Guardar cambios</button></td>`;
-                html += '</tr>';
+                html += '<tr>';
             }
             html += '</tbody></table>';
             document.getElementById('contenedor_tabla').innerHTML = html;
@@ -125,6 +125,8 @@
             input.accept = '.xlsx, .xls';
             input.onchange = async (e) => {
                 const file = e.target.files[0];
+                if (!file) return;
+                alert('Subiendo archivo: ' + file.name);
                 const formData = new FormData();
                 formData.append('archivo', file);
                 const res = await fetch('/subir_excel', { method: 'POST', body: formData });
@@ -133,7 +135,7 @@
                     alert('Excel subido correctamente. Recargando datos...');
                     cargarDatos();
                 } else {
-                    alert('Error: ' + result.error);
+                    alert('Error: ' + (result.error || 'No se pudo subir'));
                 }
             };
             input.click();
