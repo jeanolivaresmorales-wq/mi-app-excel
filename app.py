@@ -22,7 +22,7 @@ USUARIOS = [
 PAUSA_FILE = 'pausa.txt'
 
 # --- Administrador: cámbialo al nombre que quieras ---
-ADMIN_NOMBRE = "JEAN OLIVARES"   # <--- CAMBIA AQUÍ EL ADMINISTRADOR
+ADMIN_NOMBRE = "ANA JULCA"   # <--- CAMBIA AQUÍ EL ADMINISTRADOR
 
 def get_pausa():
     if os.path.exists(PAUSA_FILE):
