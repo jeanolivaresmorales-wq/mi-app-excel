@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Inicio de sesión</title>
+    <style>
+        body { font-family: Arial; text-align: center; margin-top: 50px; }
+        select, button { padding: 10px; margin: 10px; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h2>Selecciona tu nombre</h2>
+    <form method="post">
+        <select name="usuario" required>
+            {% for u in usuarios %}
+                <option value="{{ u }}">{{ u }}</option>
+            {% endfor %}
+        </select>
+        <br>
+        <button type="submit">Ingresar</button>
+    </form>
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            <p style="color:red">{{ messages[0] }}</p>
+        {% endif %}
+    {% endwith %}
+</body>
+</html>
