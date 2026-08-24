@@ -2,18 +2,22 @@
 <html>
 <head>
     <title>Panel de control</title>
+    <!-- Estilos y scripts de ag-Grid -->
+    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community@31.3.2/styles/ag-grid.css">
+    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community@31.3.2/styles/ag-theme-alpine.css">
+    <script src="https://unpkg.com/ag-grid-community@31.3.2/dist/ag-grid-community.min.js"></script>
     <style>
         body { font-family: Arial; margin: 20px; }
+        .acciones { margin: 20px 0; }
+        button { padding: 10px; margin-right: 10px; }
         .pestanas { margin-bottom: 20px; }
         .pestana { display: inline-block; padding: 10px; background: #ddd; cursor: pointer; margin-right: 5px; }
         .pestana.activa { background: #007bff; color: white; }
-        table { border-collapse: collapse; width: 100%; overflow-x: auto; display: block; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; vertical-align: top; }
-        th { background: #f2f2f2; }
-        textarea { width: 100%; box-sizing: border-box; }
-        .guardar { background: #28a745; color: white; border: none; padding: 5px 10px; cursor: pointer; }
-        .acciones { margin: 20px 0; }
-        button { padding: 10px; margin-right: 10px; }
+        #gridContainer {
+            height: 600px;
+            width: 100%;
+        }
+        .status { margin-left: 20px; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -22,88 +26,117 @@
         <button id="btnExportar">📥 Exportar Excel</button>
         <button id="btnSubir" {% if usuario != admin %}disabled{% endif %}>📂 Subir Excel nuevo (solo admin)</button>
         <button id="btnPausa" {% if usuario != admin %}disabled{% endif %}>⏸️ Pausar / Reanudar</button>
-        <span id="estadoPausa" style="margin-left: 20px;"></span>
+        <span id="estadoPausa" class="status"></span>
         <a href="/logout" style="margin-left: 20px;">Cerrar sesión</a>
     </div>
     <div class="pestanas">
         <div id="pestana_SCD" class="pestana" data-hoja="SCD-2026">SCD-2026</div>
         <div id="pestana_SAF" class="pestana" data-hoja="SAF-2026">SAF-2026</div>
     </div>
-    <div id="contenedor_tabla">
-        <p>Cargando datos...</p>
-    </div>
+    <div id="gridContainer" class="ag-theme-alpine"></div>
 
     <script>
+        // --- Configuración global ---
         let hojaActual = 'SCD-2026';
-        let datosOriginales = [];
+        let gridApi = null;
+        let gridColumnApi = null;
+        let rowData = [];
 
+        // --- Funciones para cargar y guardar ---
         async function cargarDatos() {
             const res = await fetch(`/get_datos?hoja=${hojaActual}`);
             const json = await res.json();
-            datosOriginales = json.datos;
-            const columnas = json.columnas;
-            if (!columnas || columnas.length === 0) {
-                document.getElementById('contenedor_tabla').innerHTML = '<p>No hay filas para ti en esta hoja.</p>';
+            rowData = json.datos || [];
+            // Si no hay datos, mostrar mensaje
+            if (rowData.length === 0) {
+                // Podemos mostrar un mensaje en la grid
+                gridApi.setRowData([]);
                 return;
             }
-            let html = '<table><thead><tr>';
-            columnas.forEach(col => {
-                html += `<th>${escapeHtml(col)}</th>`;
-            });
-            html += '<th>Acción</th></tr></thead><tbody>';
-            for (let i = 0; i < datosOriginales.length; i++) {
-                const fila = datosOriginales[i];
-                const rowid = fila.rowid;
-                html += `<tr id="fila_${i}">`;
-                for (let col of columnas) {
-                    if (col === 'rowid') continue;
-                    const valor = fila[col] || '';
-                    html += `<td><textarea rows="2" style="width:100%" data-col="${col}" data-fila="${i}">${escapeHtml(valor)}</textarea></td>`;
-                }
-                html += `<td><button class="guardar" data-fila="${i}" data-rowid="${rowid}">Guardar cambios</button></td>`;
-                html += '<tr>';
-            }
-            html += '</tbody></table>';
-            document.getElementById('contenedor_tabla').innerHTML = html;
-            document.querySelectorAll('.guardar').forEach(btn => {
-                btn.addEventListener('click', async (e) => {
-                    const filaIdx = btn.dataset.fila;
-                    const rowid = btn.dataset.rowid;
-                    const campos = {};
-                    const textareas = document.querySelectorAll(`#fila_${filaIdx} textarea`);
-                    textareas.forEach(ta => {
-                        const col = ta.dataset.col;
-                        campos[col] = ta.value;
-                    });
-                    const respuesta = await fetch('/guardar_fila', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ hoja: hojaActual, rowid: rowid, campos: campos })
-                    });
-                    const result = await respuesta.json();
-                    if (result.ok) {
-                        alert('Guardado exitoso');
-                        const filaOriginal = datosOriginales[filaIdx];
-                        for (let col in campos) {
-                            filaOriginal[col] = campos[col];
-                        }
-                    } else {
-                        alert('Error: ' + (result.error || 'No se pudo guardar'));
-                    }
+            // Preparar columnas dinámicas (excluir 'rowid' porque es interno)
+            const columnas = json.columnas || [];
+            const colDefs = columnas
+                .filter(col => col !== 'rowid')  // ocultar la columna interna
+                .map(col => ({
+                    field: col,
+                    headerName: col,
+                    editable: true,          // permitir edición en todas las columnas
+                    sortable: true,
+                    filter: true,
+                    resizable: true,
+                    minWidth: 150,
+                    // Si es una columna larga, permitir wrap
+                    cellStyle: { 'white-space': 'normal' },
+                    autoHeight: true,
+                }));
+            // Añadir columna de acciones (opcional: botón de guardar por fila, pero ag-Grid guarda automáticamente al editar)
+            // No necesitamos botón de guardar porque ag-Grid permite edición inline y podemos capturar el evento onCellValueChanged.
+            gridApi.setColumnDefs(colDefs);
+            gridApi.setRowData(rowData);
+        }
+
+        // --- Evento al cambiar una celda (guardar automáticamente) ---
+        async function onCellValueChanged(params) {
+            const { data, colDef, newValue, oldValue } = params;
+            if (newValue === oldValue) return; // no hubo cambio
+            const rowid = data.rowid;  // clave interna
+            const campos = {};
+            campos[colDef.field] = newValue;
+            // Enviar al servidor
+            try {
+                const resp = await fetch('/guardar_fila', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        hoja: hojaActual,
+                        rowid: rowid,
+                        campos: campos
+                    })
                 });
-            });
+                const result = await resp.json();
+                if (!result.ok) {
+                    alert('Error al guardar: ' + (result.error || 'desconocido'));
+                    // Revertir el cambio (volver al valor anterior)
+                    params.node.setDataValue(colDef.field, oldValue);
+                } else {
+                    // Actualizar el dato en rowData local (ya está actualizado en data)
+                    // Mostrar confirmación opcional
+                    // console.log('Guardado exitoso');
+                }
+            } catch (e) {
+                alert('Error de red al guardar');
+                params.node.setDataValue(colDef.field, oldValue);
+            }
         }
 
-        function escapeHtml(text) {
-            if (!text) return '';
-            return text.replace(/[&<>]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                return m;
-            });
+        // --- Inicializar grid ---
+        function initGrid() {
+            const gridDiv = document.getElementById('gridContainer');
+            const gridOptions = {
+                columnDefs: [],
+                rowData: [],
+                defaultColDef: {
+                    editable: true,
+                    sortable: true,
+                    filter: true,
+                    resizable: true,
+                    minWidth: 100,
+                },
+                onCellValueChanged: onCellValueChanged,
+                enableRangeSelection: true,        // selección de rangos
+                enableRangeHandle: true,
+                enableCellTextSelection: true,     // permitir copiar texto
+                ensureDomOrder: true,
+                suppressRowClickSelection: false,
+                // Para que se vea bien con muchas columnas
+                domLayout: 'autoHeight',
+            };
+            gridApi = agGrid.createGrid(gridDiv, gridOptions);
+            // Cargar datos iniciales
+            cargarDatos();
         }
 
+        // --- Eventos de pestañas ---
         document.getElementById('pestana_SCD').addEventListener('click', () => {
             hojaActual = 'SCD-2026';
             document.querySelectorAll('.pestana').forEach(p => p.classList.remove('activa'));
@@ -116,9 +149,12 @@
             document.getElementById('pestana_SAF').classList.add('activa');
             cargarDatos();
         });
+
+        // --- Botones de administración (igual que antes) ---
         document.getElementById('btnExportar').addEventListener('click', () => {
             window.location.href = '/exportar';
         });
+
         document.getElementById('btnSubir').addEventListener('click', () => {
             const input = document.createElement('input');
             input.type = 'file';
@@ -140,6 +176,7 @@
             };
             input.click();
         });
+
         document.getElementById('btnPausa').addEventListener('click', async () => {
             const res = await fetch('/toggle_pausa', { method: 'POST' });
             const result = await res.json();
@@ -155,14 +192,25 @@
             if (pausa) {
                 span.innerHTML = '🔴 SISTEMA EN PAUSA - No se pueden editar';
                 span.style.color = 'red';
+                // Deshabilitar edición en la grid
+                gridApi.setGridOption('defaultColDef', { editable: false });
             } else {
                 span.innerHTML = '🟢 SISTEMA ACTIVO - Ediciones permitidas';
                 span.style.color = 'green';
+                gridApi.setGridOption('defaultColDef', { editable: true });
             }
         }
 
-        document.getElementById('pestana_SCD').classList.add('activa');
-        cargarDatos();
+        // --- Inicializar todo al cargar la página ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Activar pestaña SCD por defecto
+            document.getElementById('pestana_SCD').classList.add('activa');
+            initGrid();
+            // Verificar estado de pausa inicial (por defecto no pausado)
+            // Si quieres consultar el estado actual, puedes hacer un fetch a /toggle_pausa con método GET (no implementado)
+            // Pero podemos dejarlo como "activo" por defecto
+            actualizarEstadoPausa(false);
+        });
     </script>
 </body>
 </html>
