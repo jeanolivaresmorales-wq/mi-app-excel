@@ -8,7 +8,7 @@
     <script src="https://unpkg.com/ag-grid-community@31.3.2/dist/ag-grid-community.min.js"></script>
     <style>
         body { font-family: Arial; margin: 20px; }
-        .acciones { margin: 20px 0; }
+        .acciones { margin: 20px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
         button { padding: 10px; margin-right: 10px; }
         .pestanas { margin-bottom: 20px; }
         .pestana { display: inline-block; padding: 10px; background: #ddd; cursor: pointer; margin-right: 5px; }
@@ -18,6 +18,17 @@
             width: 100%;
         }
         .status { margin-left: 20px; font-weight: bold; }
+        .loading {
+            display: none;
+            margin-left: 20px;
+            color: #007bff;
+            font-weight: bold;
+        }
+        .last-upload {
+            margin-left: 20px;
+            font-size: 0.9em;
+            color: #555;
+        }
     </style>
 </head>
 <body>
@@ -27,6 +38,8 @@
         <button id="btnSubir" {% if usuario != admin %}disabled{% endif %}>📂 Subir Excel nuevo (solo admin)</button>
         <button id="btnPausa" {% if usuario != admin %}disabled{% endif %}>⏸️ Pausar / Reanudar</button>
         <span id="estadoPausa" class="status"></span>
+        <span id="loadingMessage" class="loading">⏳ Procesando archivo, por favor espera...</span>
+        <span id="lastUpload" class="last-upload"></span>
         <a href="/logout" style="margin-left: 20px;">Cerrar sesión</a>
     </div>
     <div class="pestanas">
@@ -47,42 +60,34 @@
             const res = await fetch(`/get_datos?hoja=${hojaActual}`);
             const json = await res.json();
             rowData = json.datos || [];
-            // Si no hay datos, mostrar mensaje
             if (rowData.length === 0) {
-                // Podemos mostrar un mensaje en la grid
                 gridApi.setRowData([]);
                 return;
             }
-            // Preparar columnas dinámicas (excluir 'rowid' porque es interno)
             const columnas = json.columnas || [];
             const colDefs = columnas
-                .filter(col => col !== 'rowid')  // ocultar la columna interna
+                .filter(col => col !== 'rowid')
                 .map(col => ({
                     field: col,
                     headerName: col,
-                    editable: true,          // permitir edición en todas las columnas
+                    editable: true,
                     sortable: true,
                     filter: true,
                     resizable: true,
                     minWidth: 150,
-                    // Si es una columna larga, permitir wrap
                     cellStyle: { 'white-space': 'normal' },
                     autoHeight: true,
                 }));
-            // Añadir columna de acciones (opcional: botón de guardar por fila, pero ag-Grid guarda automáticamente al editar)
-            // No necesitamos botón de guardar porque ag-Grid permite edición inline y podemos capturar el evento onCellValueChanged.
             gridApi.setColumnDefs(colDefs);
             gridApi.setRowData(rowData);
         }
 
-        // --- Evento al cambiar una celda (guardar automáticamente) ---
         async function onCellValueChanged(params) {
             const { data, colDef, newValue, oldValue } = params;
-            if (newValue === oldValue) return; // no hubo cambio
-            const rowid = data.rowid;  // clave interna
+            if (newValue === oldValue) return;
+            const rowid = data.rowid;
             const campos = {};
             campos[colDef.field] = newValue;
-            // Enviar al servidor
             try {
                 const resp = await fetch('/guardar_fila', {
                     method: 'POST',
@@ -96,12 +101,7 @@
                 const result = await resp.json();
                 if (!result.ok) {
                     alert('Error al guardar: ' + (result.error || 'desconocido'));
-                    // Revertir el cambio (volver al valor anterior)
                     params.node.setDataValue(colDef.field, oldValue);
-                } else {
-                    // Actualizar el dato en rowData local (ya está actualizado en data)
-                    // Mostrar confirmación opcional
-                    // console.log('Guardado exitoso');
                 }
             } catch (e) {
                 alert('Error de red al guardar');
@@ -109,7 +109,6 @@
             }
         }
 
-        // --- Inicializar grid ---
         function initGrid() {
             const gridDiv = document.getElementById('gridContainer');
             const gridOptions = {
@@ -123,16 +122,14 @@
                     minWidth: 100,
                 },
                 onCellValueChanged: onCellValueChanged,
-                enableRangeSelection: true,        // selección de rangos
+                enableRangeSelection: true,
                 enableRangeHandle: true,
-                enableCellTextSelection: true,     // permitir copiar texto
+                enableCellTextSelection: true,
                 ensureDomOrder: true,
                 suppressRowClickSelection: false,
-                // Para que se vea bien con muchas columnas
                 domLayout: 'autoHeight',
             };
             gridApi = agGrid.createGrid(gridDiv, gridOptions);
-            // Cargar datos iniciales
             cargarDatos();
         }
 
@@ -150,7 +147,7 @@
             cargarDatos();
         });
 
-        // --- Botones de administración (igual que antes) ---
+        // --- Botones de administración ---
         document.getElementById('btnExportar').addEventListener('click', () => {
             window.location.href = '/exportar';
         });
@@ -162,16 +159,34 @@
             input.onchange = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                alert('Subiendo archivo: ' + file.name);
-                const formData = new FormData();
-                formData.append('archivo', file);
-                const res = await fetch('/subir_excel', { method: 'POST', body: formData });
-                const result = await res.json();
-                if (result.ok) {
-                    alert('Excel subido correctamente. Recargando datos...');
-                    cargarDatos();
-                } else {
-                    alert('Error: ' + (result.error || 'No se pudo subir'));
+                // Mostrar indicador de carga
+                const loadingMsg = document.getElementById('loadingMessage');
+                const btnSubir = document.getElementById('btnSubir');
+                loadingMsg.style.display = 'inline';
+                btnSubir.disabled = true;
+                btnSubir.textContent = '⏳ Subiendo...';
+                try {
+                    const formData = new FormData();
+                    formData.append('archivo', file);
+                    const res = await fetch('/subir_excel', { method: 'POST', body: formData });
+                    const result = await res.json();
+                    if (result.ok) {
+                        alert('✅ Excel subido correctamente');
+                        // Actualizar fecha/hora de última carga
+                        const ahora = new Date();
+                        document.getElementById('lastUpload').textContent = 'Última carga: ' + ahora.toLocaleString();
+                        // Recargar datos
+                        cargarDatos();
+                    } else {
+                        alert('❌ Error: ' + (result.error || 'No se pudo subir'));
+                    }
+                } catch (err) {
+                    alert('❌ Error de red: ' + err.message);
+                } finally {
+                    // Ocultar indicador de carga
+                    loadingMsg.style.display = 'none';
+                    btnSubir.disabled = false;
+                    btnSubir.textContent = '📂 Subir Excel nuevo (solo admin)';
                 }
             };
             input.click();
@@ -192,7 +207,6 @@
             if (pausa) {
                 span.innerHTML = '🔴 SISTEMA EN PAUSA - No se pueden editar';
                 span.style.color = 'red';
-                // Deshabilitar edición en la grid
                 gridApi.setGridOption('defaultColDef', { editable: false });
             } else {
                 span.innerHTML = '🟢 SISTEMA ACTIVO - Ediciones permitidas';
@@ -201,15 +215,12 @@
             }
         }
 
-        // --- Inicializar todo al cargar la página ---
+        // --- Inicializar ---
         document.addEventListener('DOMContentLoaded', () => {
-            // Activar pestaña SCD por defecto
             document.getElementById('pestana_SCD').classList.add('activa');
             initGrid();
-            // Verificar estado de pausa inicial (por defecto no pausado)
-            // Si quieres consultar el estado actual, puedes hacer un fetch a /toggle_pausa con método GET (no implementado)
-            // Pero podemos dejarlo como "activo" por defecto
             actualizarEstadoPausa(false);
+            // Si ya hay una carga previa, mostrar la fecha (opcional)
         });
     </script>
 </body>
